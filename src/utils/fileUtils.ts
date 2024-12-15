@@ -16,7 +16,7 @@ export const scanDirectory = async (directoryHandle: FileSystemDirectoryHandle):
 
                     for await (const fileHandle of (conversationHandle as FileSystemDirectoryHandle).values()) {
                         if (fileHandle.kind === 'file') {
-                            if (fileHandle.name === 'audio.wav') {
+                            if (fileHandle.name === 'audio_processed.wav') {
                                 audioFileHandle = fileHandle as FileSystemFileHandle;
                             } else if (fileHandle.name === 'conversation.csv') {
                                 conversationLogHandle = fileHandle as FileSystemFileHandle;

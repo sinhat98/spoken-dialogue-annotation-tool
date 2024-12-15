@@ -24,10 +24,35 @@
    └── experiments_xxxx（xxxxに関する実験データ）
        ├── {customerId}
        │   └── {conversationId}
-       │       ├── audio.wav        # 対話音声ファイル
-       │       └── conversation.csv # 対話のアノテーションデータ
-       ├── intent.txt              # インテント一覧
-       └── slot.txt                # スロットキー一覧
+       │       ├── audio.wav            # 元の対話音声ファイル
+       │       ├── audio_processed.wav  # モノラル変換済み音声ファイル（アノテーションに使用）
+       │       └── conversation.csv     # 対話のアノテーションデータ
+       ├── intent.txt                  # インテント一覧
+       └── slot.txt                    # スロットキー一覧
+   ```
+
+3. 音声ファイルの前処理:
+   アノテーションツールは`audio_processed.wav`を使用します。以下の手順で音声ファイルを前処理してください：
+
+   a. 前処理スクリプトに実行権限を付与:
+   ```bash
+   chmod +x utils/convert_to_mono.sh
+   ```
+
+   b. 音声ファイルをモノラルに変換:
+   ```bash
+   # 全ての音声ファイルを処理
+   ./utils/convert_to_mono.sh
+
+   # または特定のディレクトリの音声ファイルのみを処理
+   ./utils/convert_to_mono.sh experiments_xxxx/customer123
+   ```
+
+   このスクリプトは各`audio.wav`ファイルからモノラルの`audio_processed.wav`を生成します。
+
+4. 依存パッケージのインストール:
+   ```bash
+   npm install
    ```
 
    ### 設定ファイルの形式
@@ -50,12 +75,9 @@
    ### 音声ファイル要件
    - フォーマット: WAV形式
    - サンプリングレート: 16kHz
-   - チャンネル: モノラル
-
-3. 依存パッケージのインストール:
-   ```bash
-   npm install
-   ```
+   - チャンネル: 
+     - audio.wav: ステレオ可
+     - audio_processed.wav: モノラル（自動生成）
 
 ## 使用可能なスクリプト
 
