@@ -1,0 +1,14 @@
+{
+    "compilerOptions": {
+        "types": [
+            "electron"
+        ],
+        "typeRoots": [
+            "./node_modules/@types",
+            "./src/types"
+        ]
+    },
+    "files": [
+        "src/types/global.d.ts"
+    ]
+}

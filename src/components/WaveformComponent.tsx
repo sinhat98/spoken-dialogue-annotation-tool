@@ -11,7 +11,8 @@ import FlagIcon from '@mui/icons-material/Flag';
 import ZoomInIcon from '@mui/icons-material/ZoomIn';
 import ZoomOutIcon from '@mui/icons-material/ZoomOut';
 import { motion } from 'framer-motion';
-import { Segment } from '../types';
+import { Segment, SlotValue, Turn } from '../types';
+import SlotIntentEditor from './SlotIntentEditor.tsx';
 
 interface WaveformProps {
     audioFile: File;
@@ -21,15 +22,61 @@ interface WaveformProps {
     segments: Segment[];
 }
 
+interface WaveMarker {
+    time: number;
+    label: string;
+    color?: string;
+    position?: string;
+    draggable?: boolean;
+}
+
+// カスタム型定義
+type WaveSurferPlugin = {
+    init(): void;
+    destroy(): void;
+    [key: string]: any;
+};
+
+// WaveSurfer拡張型
+interface ExtendedWaveSurfer extends Omit<WaveSurfer, 'markers' | 'regions'> {
+    isScrolling?: boolean;
+    scrollTimeout?: NodeJS.Timeout;
+    backend: {
+        getPeaks(width: number): number[];
+        getPlayedPercents(): number;
+    };
+    drawer: {
+        width: number;
+        params: {
+            barHeight: number;
+        };
+        drawPeaks(peaks: number[]): void;
+        progress(progress: number): void;
+    };
+    markers: WaveSurferPlugin & {
+        markers: { [key: string]: WaveMarker };
+        add(params: any): void;
+        remove(marker: any): void;
+        clear(): void;
+    };
+    regions: WaveSurferPlugin & {
+        list: { [key: string]: any };
+        add(params: any): void;
+        clear(): void;
+    };
+    clearMarkers(): void;
+    clearRegions(): void;
+}
+
 const WaveformComponent: React.FC<WaveformProps> = ({
     audioFile,
     onMarkerSet,
     onMarkerSelect,
     selectedTurnIndex,
-    segments
+    segments,
 }) => {
     const waveformRef = useRef<HTMLDivElement | null>(null);
-    const wavesurfer = useRef<WaveSurfer | null>(null);
+    const wavesurfer = useRef<ExtendedWaveSurfer | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [isReady, setIsReady] = useState(false);
     const [duration, setDuration] = useState<number>(0);
@@ -43,7 +90,7 @@ const WaveformComponent: React.FC<WaveformProps> = ({
     const MIN_ZOOM = 1;
     const ZOOM_STEP = 0.1;
 
-    const updateMarkersDisplay = useCallback((ws: WaveSurfer, segments: Segment[], preserveExisting: boolean = false) => {
+    const updateMarkersDisplay = useCallback((ws: ExtendedWaveSurfer, segments: Segment[], preserveExisting: boolean = false) => {
         if (!preserveExisting) {
             ws.clearMarkers();
             ws.clearRegions();
@@ -175,8 +222,8 @@ const WaveformComponent: React.FC<WaveformProps> = ({
         const ws = wavesurfer.current;
 
         // 既存の一時マーカーを取得
-        const existingStartMarker = Object.values(ws.markers.markers || {}).find((m: any) => m.label === '一時マーカー (開始)');
-        const existingEndMarker = Object.values(ws.markers.markers || {}).find((m: any) => m.label === '一時マーカー (終了)');
+        const existingStartMarker = (Object.values(ws.markers.markers || {}) as WaveMarker[]).find(m => m.label === '一時マーカー (開始)');
+        const existingEndMarker = (Object.values(ws.markers.markers || {}) as WaveMarker[]).find(m => m.label === '一時マーカー (終了)');
 
         if (!existingStartMarker) {
             // 発話開始マーカーを追加
@@ -202,7 +249,7 @@ const WaveformComponent: React.FC<WaveformProps> = ({
             });
         } else if (!existingEndMarker) {
             // 発話終了マーカーを追加（開始マーカーより後の時間のみ）
-            if (time > existingStartMarker.time) {
+            if (time > (existingStartMarker as WaveMarker).time) {
                 ws.addMarker({
                     time: time,
                     label: '一時マーカー (終了)',
@@ -268,8 +315,8 @@ const WaveformComponent: React.FC<WaveformProps> = ({
             });
 
             // 一時マーカーを処理
-            const tempStartMarker = Object.values(ws.markers.markers || {}).find((m: any) => m.label === '一時マーカー (開始)');
-            const tempEndMarker = Object.values(ws.markers.markers || {}).find((m: any) => m.label === '一時マーカー (終了)');
+            const tempStartMarker = (Object.values(ws.markers.markers || {}) as WaveMarker[]).find(m => m.label === '一時マーカー (開始)');
+            const tempEndMarker = (Object.values(ws.markers.markers || {}) as WaveMarker[]).find(m => m.label === '一時マーカー (終了)');
 
             if (tempStartMarker && tempEndMarker) {
                 const newSegment: Segment = {
@@ -326,8 +373,8 @@ const WaveformComponent: React.FC<WaveformProps> = ({
         const ws = wavesurfer.current;
 
         // 既存の一時マーカーを取得
-        const existingStartMarker = Object.values(ws.markers.markers || {}).find((m: any) => m.label === '一時マーカー (開始)');
-        const existingEndMarker = Object.values(ws.markers.markers || {}).find((m: any) => m.label === '一時マーカー (終了)');
+        const existingStartMarker = (Object.values(ws.markers.markers || {}) as WaveMarker[]).find(m => m.label === '一時マーカー (開始)');
+        const existingEndMarker = (Object.values(ws.markers.markers || {}) as WaveMarker[]).find(m => m.label === '一時マーカー (終了)');
 
         if (!existingStartMarker) {
             // 発話開始マーカーを追加
@@ -353,7 +400,7 @@ const WaveformComponent: React.FC<WaveformProps> = ({
             });
         } else if (!existingEndMarker) {
             // 発話終了マーカーを追加（開始マーカーより後の時間のみ）
-            if (time > existingStartMarker.time) {
+            if (time > (existingStartMarker as WaveMarker).time) {
                 ws.addMarker({
                     time: time,
                     label: '一時マーカー (終了)',
@@ -383,16 +430,16 @@ const WaveformComponent: React.FC<WaveformProps> = ({
         setHasUnsavedMarkerChanges(updatedStartMarker !== undefined && updatedEndMarker !== undefined);
     };
 
-    const handleMarkerDrag = (marker: any) => {
+    const handleMarkerDrag = (marker: WaveMarker) => {
         if (!wavesurfer.current) return;
         const ws = wavesurfer.current;
 
-        // 一時マーカーの視覚的な位置のみを更新
+        // 一時マーカーの視覚的な位置みを更新
         if (marker.label === '一時マーカー (開始)') {
-            const endMarker = Object.values(ws.markers.markers || {}).find((m: any) => m.label === '一時マーカー (終了)');
+            const endMarker = (Object.values(ws.markers.markers || {}) as WaveMarker[]).find(m => m.label === '一時マーカー (終了)');
             marker.time = Math.min(marker.time, endMarker?.time || Infinity);
         } else if (marker.label === '一時マーカー (終了)') {
-            const startMarker = Object.values(ws.markers.markers || {}).find((m: any) => m.label === '一時マーカー (開始)');
+            const startMarker = (Object.values(ws.markers.markers || {}) as WaveMarker[]).find(m => m.label === '一時マーカー (開始)');
             marker.time = Math.max(marker.time, startMarker?.time || 0);
         }
 
@@ -482,12 +529,12 @@ const WaveformComponent: React.FC<WaveformProps> = ({
                 }),
                 RegionsPlugin.create()
             ],
-            height: 200,
+            height: 256,
             barWidth: 2,
             barGap: 1,
             barRadius: 2,
             responsive: true,
-            normalize: true,
+            normalize: false,
             interact: true,
             minPxPerSec: 100,
             scrollParent: true,
@@ -495,13 +542,14 @@ const WaveformComponent: React.FC<WaveformProps> = ({
             pixelRatio: 1,
             autoCenter: true,
             partialRender: true,
-            barHeight: 1.0,
+            barHeight: 0.8,
             mediaControls: false,
             hideScrollbar: true,
             splitChannels: false,
             backend: 'WebAudio',
             cursorWidth: 1,
-        });
+            maxCanvasWidth: 4000
+        }) as unknown as ExtendedWaveSurfer;
 
         wavesurfer.current = ws;
 
@@ -509,6 +557,36 @@ const WaveformComponent: React.FC<WaveformProps> = ({
             setIsReady(true);
             setDuration(ws.getDuration());
             updateMarkersDisplay(ws, segments);
+
+            try {
+                // 波形の振幅を解析して適切なスケールを設定
+                const peaks = ws.backend.getPeaks(ws.drawer.width);
+                const maxPeak = Math.max(...peaks.map(Math.abs));
+
+                // 最大振幅が小さい場合は大きめにスケーリング
+                // 0.1未満: 8倍
+                // 0.1-0.3: 4倍
+                // 0.3-0.5: 2倍
+                // 0.5以上: そのまま
+                let scale: number;
+                if (maxPeak < 0.1) {
+                    scale = 8.0;
+                } else if (maxPeak < 0.3) {
+                    scale = 4.0;
+                } else if (maxPeak < 0.5) {
+                    scale = 2.0;
+                } else {
+                    scale = 1.0;
+                }
+
+                // 最小スケールを0.8に設定
+                ws.drawer.params.barHeight = Math.max(0.8, scale);
+                ws.drawer.drawPeaks(peaks);
+
+                console.log(`Max peak: ${maxPeak}, Applied scale: ${scale}`);
+            } catch (error) {
+                console.warn('Failed to adjust waveform scale:', error);
+            }
 
             // 初期状態では波形全体を表示
             const containerWidth = ws.container.clientWidth;
@@ -693,7 +771,7 @@ const WaveformComponent: React.FC<WaveformProps> = ({
                             >
                                 {Object.values(wavesurfer.current.markers.markers || {}).some(m => (m as any).label === '一時マーカー (開始)')
                                     ? '発話終了マーカーを追加'
-                                    : '発話開始マーカーを追加'}
+                                    : 'マーカーを追加'}
                             </Button>
                             <Button
                                 variant="contained"
@@ -786,22 +864,50 @@ const WaveformComponent: React.FC<WaveformProps> = ({
             <Box
                 ref={waveformRef}
                 sx={{
-                    mb: 3,
+                    mb: 5,
                     cursor: isAnnotationMode ? 'crosshair' : 'default',
                     '&:hover': {
                         backgroundColor: isAnnotationMode ? 'rgba(0, 0, 0, 0.02)' : 'inherit'
                     },
-                    height: 200,
+                    height: 256,
+                    position: 'relative',
                     '& wave': {
                         overflow: 'auto !important'
                     },
                     '& wave > wave': {
                         overflow: 'hidden !important'
+                    },
+                    '& > wave': {
+                        marginBottom: '30px !important'
+                    },
+                    // スクロールバーのスタイル
+                    '& ::-webkit-scrollbar': {
+                        height: '12px',
+                        backgroundColor: '#f5f5f5'
+                    },
+                    '& ::-webkit-scrollbar-thumb': {
+                        backgroundColor: '#888',
+                        borderRadius: '6px',
+                        '&:hover': {
+                            backgroundColor: '#666'
+                        }
+                    },
+                    '& ::-webkit-scrollbar-track': {
+                        backgroundColor: '#f5f5f5',
+                        borderRadius: '6px'
                     }
                 }}
             />
 
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+            <Box sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                mb: 3,
+                mt: 4,
+                position: 'relative',
+                zIndex: 1
+            }}>
                 <Stack direction="row" spacing={3} alignItems="center">
                     <Button
                         variant="contained"
@@ -816,69 +922,14 @@ const WaveformComponent: React.FC<WaveformProps> = ({
                     >
                         {isPlaying ? '一時停止' : '再生'}
                     </Button>
-                    <Typography variant="body1" sx={{ fontSize: '1.3rem' }}>
+                    <Typography variant="body1" sx={{ fontSize: '1.3rem', minWidth: '150px' }}>
                         現在位置: {currentTime.toFixed(2)}秒
                     </Typography>
                 </Stack>
-                <Typography variant="body1" color="textSecondary" sx={{ fontSize: '1.3rem' }}>
+                <Typography variant="body1" color="textSecondary" sx={{ fontSize: '1.3rem', minWidth: '150px', textAlign: 'right' }}>
                     総再生時間: {duration.toFixed(2)}秒
                 </Typography>
             </Box>
-
-            {segments.length > 0 && (
-                <Box sx={{ mt: 3 }}>
-                    <Typography variant="h6" gutterBottom sx={{ fontSize: '1.5rem', mb: 2 }}>
-                        マーカー一覧: {segments.length}個
-                    </Typography>
-                    <Stack spacing={2}>
-                        {segments.map((segment, index) => (
-                            <Paper
-                                key={index}
-                                elevation={1}
-                                sx={{
-                                    p: 2.5,
-                                    bgcolor: index === selectedTurnIndex ? 'rgba(25, 118, 210, 0.08)' : 'background.paper',
-                                    '&:hover': {
-                                        bgcolor: 'rgba(25, 118, 210, 0.12)'
-                                    }
-                                }}
-                            >
-                                <Stack
-                                    direction="row"
-                                    spacing={2}
-                                    alignItems="center"
-                                    onClick={() => onMarkerSelect?.(index)}
-                                    sx={{ cursor: 'pointer' }}
-                                >
-                                    <Typography variant="body1" sx={{ flex: 1, fontSize: '1.3rem' }}>
-                                        発話 {index + 1}:
-                                        <Typography component="span" color="success.main" sx={{ ml: 2, fontSize: '1.3rem' }}>
-                                            開始 {segment.start.toFixed(2)}秒
-                                        </Typography>
-                                        <Typography component="span" color="error.main" sx={{ ml: 2, fontSize: '1.3rem' }}>
-                                            終了 {segment.end.toFixed(2)}秒
-                                        </Typography>
-                                        <Typography component="span" color="textSecondary" sx={{ ml: 2, fontSize: '1.2rem' }}>
-                                            (セグメント: {Math.max(0, segment.end - 0.1).toFixed(2)}秒 ～ {Math.min(duration, segment.end + 0.1).toFixed(2)}秒)
-                                        </Typography>
-                                    </Typography>
-                                    <Button
-                                        size="large"
-                                        color="error"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleDeleteMarker(index);
-                                        }}
-                                        sx={{ fontSize: '1.3rem' }}
-                                    >
-                                        削除
-                                    </Button>
-                                </Stack>
-                            </Paper>
-                        ))}
-                    </Stack>
-                </Box>
-            )}
 
             <Snackbar
                 open={showMarkerFeedback}

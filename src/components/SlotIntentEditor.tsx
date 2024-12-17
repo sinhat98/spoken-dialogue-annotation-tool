@@ -1,21 +1,23 @@
 import React, { useState, useMemo } from 'react';
 import {
     Box,
-    Paper,
     Typography,
     TextField,
     Autocomplete,
-    Button,
-    Stack,
     Chip,
+    Stack,
     IconButton,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
-import CheckIcon from '@mui/icons-material/Check';
-import AddIcon from '@mui/icons-material/Add';
-import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
-import { motion, AnimatePresence } from 'framer-motion';
 import { SlotValue } from '../types';
+import AddIcon from '@mui/icons-material/Add';
+import CloseIcon from '@mui/icons-material/Close';
+import CheckIcon from '@mui/icons-material/Check';
+import { motion, AnimatePresence } from 'framer-motion';
+import { green, grey } from '@mui/material/colors';
+import { useSnackbar } from 'notistack';
+import SaveIcon from '@mui/icons-material/Save';
+import EditIcon from '@mui/icons-material/Edit';
 
 interface SlotIntentEditorProps {
     turnIndex?: number;
@@ -28,309 +30,333 @@ interface SlotIntentEditorProps {
     onSlotsChange?: (slots: SlotValue[]) => void;
     onDialogueSlotsChange?: (slots: SlotValue[]) => void;
     isDialogueLevel?: boolean;
+    onDeleteTurn?: () => void;
+    onDeleteSlot?: (index: number) => void;
+    showIntent?: boolean;
 }
 
 interface EditingSlot {
     key: string;
     value: string;
-    isEditing: boolean;
+    isConfirmed: boolean;
 }
 
 const SlotIntentEditor: React.FC<SlotIntentEditorProps> = ({
     turnIndex,
-    intent,
+    intent = '',
     slots = [],
     dialogueSlots = [],
-    predefinedIntents,
+    predefinedIntents = [],
     predefinedSlotKeys = [],
     onIntentChange,
     onSlotsChange,
     onDialogueSlotsChange,
-    isDialogueLevel = false
+    isDialogueLevel = false,
+    onDeleteTurn,
+    onDeleteSlot,
+    showIntent = true,
 }) => {
+    const { enqueueSnackbar } = useSnackbar();
+
     // 編集中のスロットの状態管理
     const [editingSlots, setEditingSlots] = useState<EditingSlot[]>([]);
-    const currentSlots = isDialogueLevel ? dialogueSlots : slots;
-    const [newSlotKey, setNewSlotKey] = useState('');
+    const [isSelectingSlot, setIsSelectingSlot] = useState(false);
+    const [selectedSlotKey, setSelectedSlotKey] = useState<string>('');
 
-    // 確定済みスロットのキーを取得
-    const confirmedSlotKeys = useMemo(() =>
-        currentSlots.map(slot => slot.key),
-        [currentSlots]
-    );
+    // 利用可能なスロットキーを計算
+    const availableSlotKeys = useMemo(() => {
+        // 既存のスロットのキーを取得
+        const existingSlotKeys = slots.map(slot => slot.key);
+        // 編集中のスロットのキーを取得
+        const editingSlotKeys = editingSlots.map(slot => slot.key);
+        // 両方のキーを除外した利用可能なキーを返す
+        return predefinedSlotKeys.filter(key =>
+            !existingSlotKeys.includes(key) && !editingSlotKeys.includes(key)
+        );
+    }, [predefinedSlotKeys, slots, editingSlots]);
 
-    // 利用可能なスロットキーを取得
-    const availableSlotKeys = useMemo(() =>
-        predefinedSlotKeys.filter(key => !confirmedSlotKeys.includes(key)),
-        [predefinedSlotKeys, confirmedSlotKeys]
-    );
-
-    // 編集中のスロットを追加
+    // スロットの追加（編集モードへ）
     const handleAddEditingSlot = (key: string) => {
-        if (!editingSlots.find(slot => slot.key === key)) {
-            setEditingSlots([...editingSlots, { key, value: '', isEditing: true }]);
+        // 既存のスロットや編集中のスロットと重複しないことを確認
+        const isExistingSlot = slots.some(slot => slot.key === key);
+        const isEditingSlot = editingSlots.some(slot => slot.key === key);
+
+        if (!isExistingSlot && !isEditingSlot) {
+            setEditingSlots(prevSlots => [...prevSlots, {
+                key,
+                value: '',
+                isConfirmed: false
+            }]);
+            setIsSelectingSlot(false);
+            setSelectedSlotKey('');
+
+            // 新しいフィールドにフォーカスを当てる
+            setTimeout(() => {
+                const inputElement = document.querySelector(`input[data-slot-key="${key}"]`) as HTMLInputElement;
+                if (inputElement) {
+                    inputElement.focus();
+                }
+            }, 100);
         }
     };
 
-    // スロットの値を更新
+    // スロットの値を更新（未確定のスロットのみ）
     const handleUpdateSlotValue = (key: string, value: string) => {
         setEditingSlots(editingSlots.map(slot =>
-            slot.key === key ? { ...slot, value } : slot
+            slot.key === key && !slot.isConfirmed ? { ...slot, value } : slot
         ));
     };
 
-    // スロットを確定
+    // 編集中のスロットを確定
     const handleConfirmSlot = (editingSlot: EditingSlot) => {
-        if (editingSlot.value.trim()) {
-            const newSlot: SlotValue = { key: editingSlot.key, value: editingSlot.value.trim() };
-            if (isDialogueLevel && onDialogueSlotsChange) {
-                onDialogueSlotsChange([...dialogueSlots, newSlot]);
-            } else if (onSlotsChange) {
-                onSlotsChange([...slots, newSlot]);
+        if (!editingSlot.value.trim()) return;
+
+        // スロットを保存
+        const newSlot: SlotValue = {
+            key: editingSlot.key,
+            value: editingSlot.value.trim()
+        };
+
+        // ターンレベルのスロットを更新
+        if (onSlotsChange) {
+            const newSlots = [...slots];
+            const existingIndex = newSlots.findIndex(s => s.key === newSlot.key);
+            if (existingIndex >= 0) {
+                newSlots[existingIndex] = newSlot;
+            } else {
+                newSlots.push(newSlot);
             }
-            setEditingSlots(editingSlots.filter(slot => slot.key !== editingSlot.key));
+            onSlotsChange(newSlots);
+
+            // 確定フィードバックを表示
+            enqueueSnackbar(`${editingSlot.key}: ${editingSlot.value} を保存しました`, {
+                variant: 'success',
+                autoHideDuration: 2000,
+                anchorOrigin: { vertical: 'bottom', horizontal: 'right' }
+            });
+
+            // 編集中のスロットを保存済みスロットとして追加した後に削除
+            setEditingSlots(prevSlots => prevSlots.filter(slot => slot.key !== editingSlot.key));
+        }
+    };
+
+    // Autocompleteでスロットが選択された時の処理
+    const handleSlotSelection = (value: string | null) => {
+        if (value) {
+            handleAddEditingSlot(value);
+            // フォーカスを新しい入力フィールドに移動させる
+            setTimeout(() => {
+                const inputElement = document.querySelector(`input[data-slot-key="${value}"]`) as HTMLInputElement;
+                if (inputElement) {
+                    inputElement.focus();
+                }
+            }, 100);
         }
     };
 
     // スロットを削除
     const handleRemoveSlot = (index: number) => {
-        if (isDialogueLevel && onDialogueSlotsChange) {
-            onDialogueSlotsChange(dialogueSlots.filter((_, i) => i !== index));
+        const removedSlot = slots[index];
+
+        // 親コンポーネントに削除を通知
+        if (onDeleteSlot) {
+            onDeleteSlot(index);
         } else if (onSlotsChange) {
-            onSlotsChange(slots.filter((_, i) => i !== index));
+            const newSlots = [...slots];
+            newSlots.splice(index, 1);
+            onSlotsChange(newSlots);
         }
+
+        // 削除フィードバックを表示
+        enqueueSnackbar(`${removedSlot.key}: ${removedSlot.value} を削除しました`, {
+            variant: 'info',
+            autoHideDuration: 2000,
+            anchorOrigin: { vertical: 'bottom', horizontal: 'right' }
+        });
+
+        // スロット選択UIを表示
+        setIsSelectingSlot(true);
     };
 
     // 編集中のスロットを削除
     const handleRemoveEditingSlot = (key: string) => {
-        setEditingSlots(editingSlots.filter(slot => slot.key !== key));
+        setEditingSlots(prevSlots => prevSlots.filter(slot => slot.key !== key));
+        setIsSelectingSlot(true);
     };
 
-    // 新しいスロットキーを追加
-    const handleAddNewSlot = () => {
-        if (newSlotKey && !predefinedSlotKeys.includes(newSlotKey)) {
-            setEditingSlots([...editingSlots, { key: newSlotKey, value: '', isEditing: true }]);
-            setNewSlotKey('');
+    // すべての確定済みスロットを保存
+    const handleSaveAllConfirmedSlots = () => {
+        const confirmedSlots = editingSlots
+            .filter(slot => slot.isConfirmed)
+            .map(({ key, value }) => ({ key, value }));
+
+        if (onSlotsChange) {
+            // 既存のスロットと新しいスロットをマージ
+            const newSlots = [...slots];
+            confirmedSlots.forEach(newSlot => {
+                const existingIndex = newSlots.findIndex(s => s.key === newSlot.key);
+                if (existingIndex >= 0) {
+                    newSlots[existingIndex] = newSlot;
+                } else {
+                    newSlots.push(newSlot);
+                }
+            });
+            onSlotsChange(newSlots);
+
+            // 対話レベルのスロットを更新
+            if (onDialogueSlotsChange) {
+                const newDialogueSlots = [...(dialogueSlots || [])];
+                confirmedSlots.forEach(newSlot => {
+                    const dialogueSlotIndex = newDialogueSlots.findIndex(s => s.key === newSlot.key);
+                    if (dialogueSlotIndex >= 0) {
+                        newDialogueSlots[dialogueSlotIndex] = newSlot;
+                    } else {
+                        newDialogueSlots.push(newSlot);
+                    }
+                });
+                onDialogueSlotsChange(newDialogueSlots);
+            }
+
+            // 確定済みのスロットを編集中リストから削除
+            setEditingSlots(prevSlots => prevSlots.filter(slot => !slot.isConfirmed));
+
+            // 保存完了フィードバックを表示
+            enqueueSnackbar('すべての確定済みスロットを保存しました', {
+                variant: 'success',
+                autoHideDuration: 2000,
+                anchorOrigin: { vertical: 'bottom', horizontal: 'right' }
+            });
         }
     };
-
-    const handleDragEnd = (result: any) => {
-        if (!result.destination) return;
-
-        const items = Array.from(currentSlots);
-        const [reorderedItem] = items.splice(result.source.index, 1);
-        items.splice(result.destination.index, 0, reorderedItem);
-
-        if (isDialogueLevel && onDialogueSlotsChange) {
-            onDialogueSlotsChange(items);
-        } else if (onSlotsChange) {
-            onSlotsChange(items);
-        }
-    };
-
-    const MotionPaper = motion(Paper);
 
     return (
-        <MotionPaper
-            elevation={1}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            sx={{ p: isDialogueLevel ? 0.75 : 1.5 }}
-        >
-            <Stack spacing={isDialogueLevel ? 0.75 : 1.5}>
-                {/* Intent Field - Only show for turn-level annotation */}
-                {!isDialogueLevel && (
-                    <Box>
-                        <Typography
-                            variant="subtitle1"
-                            gutterBottom
-                            sx={{
-                                fontSize: '1.3rem',
-                                fontWeight: 500,
-                                mb: 1
-                            }}
-                        >
-                            ターン {turnIndex! + 1} のインテント
+        <Stack spacing={2}>
+            <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
+                {/* インテント入力フィールド */}
+                {showIntent && (
+                    <Box sx={{ minWidth: '300px' }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>
+                            インテント:
                         </Typography>
-                        <motion.div whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}>
-                            <Autocomplete
-                                freeSolo
-                                value={intent}
-                                options={predefinedIntents || []}
-                                onChange={(_, newValue) => onIntentChange?.(newValue || '')}
-                                renderInput={(params) => (
-                                    <TextField
-                                        {...params}
-                                        label="インテント"
-                                        variant="outlined"
-                                        fullWidth
-                                        sx={{
-                                            '& .MuiInputBase-input': {
-                                                fontSize: '1rem',
-                                                py: 1
-                                            }
-                                        }}
-                                    />
-                                )}
-                            />
-                        </motion.div>
+                        <Autocomplete
+                            freeSolo
+                            size="small"
+                            value={intent}
+                            options={predefinedIntents}
+                            onChange={(_, newValue) => onIntentChange?.(newValue || '')}
+                            sx={{ width: '100%' }}
+                            renderInput={(params) => (
+                                <TextField
+                                    {...params}
+                                    placeholder="インテントを入力"
+                                    size="small"
+                                />
+                            )}
+                        />
                     </Box>
                 )}
 
-                {/* Slots Section */}
-                <Box>
-                    <Typography
-                        variant="subtitle2"
-                        sx={{
-                            fontSize: '1.3rem',
-                            fontWeight: 500,
-                            mb: 0
-                        }}
-                    >
-                        {isDialogueLevel ? '対話全体スロット' : 'ターンスロット'}
+                {/* スロット入力 */}
+                <Box sx={{ flex: 1 }}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>
+                        スロット:
                     </Typography>
-
-                    {/* Confirmed Slots with Drag and Drop */}
-                    <DragDropContext onDragEnd={handleDragEnd}>
-                        <Droppable droppableId="slots" direction="horizontal">
-                            {(provided) => (
-                                <Box
-                                    ref={provided.innerRef}
-                                    {...provided.droppableProps}
-                                    sx={{
-                                        display: 'flex',
-                                        flexWrap: 'wrap',
-                                        gap: 1.5,
-                                        minHeight: isDialogueLevel ? 40 : 40,
-                                        my: 2
-                                    }}
-                                >
-                                    <AnimatePresence>
-                                        {currentSlots.map((slot, index) => (
-                                            <Draggable
-                                                key={`${slot.key}-${index}`}
-                                                draggableId={`${slot.key}-${index}`}
-                                                index={index}
-                                            >
-                                                {(provided, snapshot) => (
-                                                    <div
-                                                        ref={provided.innerRef}
-                                                        {...provided.draggableProps}
-                                                        {...provided.dragHandleProps}
-                                                    >
-                                                        <motion.div
-                                                            initial={{ opacity: 0, scale: 0.8 }}
-                                                            animate={{ opacity: 1, scale: 1 }}
-                                                            exit={{ opacity: 0, scale: 0.8 }}
-                                                            whileHover={{ scale: 1.05 }}
-                                                            style={{
-                                                                transformOrigin: 'center',
-                                                                zIndex: snapshot.isDragging ? 999 : 'auto'
-                                                            }}
-                                                        >
-                                                            <Chip
-                                                                label={`${slot.key}: ${slot.value}`}
-                                                                color={isDialogueLevel ? "secondary" : "primary"}
-                                                                onDelete={() => handleRemoveSlot(index)}
-                                                                deleteIcon={<DeleteIcon fontSize="medium" />}
-                                                                size="medium"
-                                                                sx={{
-                                                                    fontSize: '1.1rem',
-                                                                    height: isDialogueLevel ? '32px' : '40px',
-                                                                    '& .MuiChip-label': {
-                                                                        px: 2
-                                                                    },
-                                                                    boxShadow: snapshot.isDragging ? '0 5px 10px rgba(0,0,0,0.1)' : 'none'
-                                                                }}
-                                                            />
-                                                        </motion.div>
-                                                    </div>
-                                                )}
-                                            </Draggable>
-                                        ))}
-                                    </AnimatePresence>
-                                    {provided.placeholder}
-                                </Box>
-                            )}
-                        </Droppable>
-                    </DragDropContext>
-
-                    {/* Available Slots */}
-                    <Box sx={{
-                        display: 'flex',
-                        flexWrap: 'wrap',
-                        gap: 1,
-                        mb: 1.5,
-                        minHeight: isDialogueLevel ? 40 : 40
-                    }}>
-                        <AnimatePresence>
-                            {availableSlotKeys.map((key) => (
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {/* 既存のスロット関連のUI */}
+                        <AnimatePresence mode="popLayout">
+                            {slots.map((slot, index) => (
                                 <motion.div
-                                    key={key}
+                                    key={`${slot.key}-${index}`}
                                     initial={{ opacity: 0, scale: 0.8 }}
                                     animate={{ opacity: 1, scale: 1 }}
                                     exit={{ opacity: 0, scale: 0.8 }}
                                     whileHover={{ scale: 1.05 }}
+                                    layout
                                 >
-                                    <Chip
-                                        label={key}
-                                        variant="outlined"
-                                        onClick={() => handleAddEditingSlot(key)}
-                                        color={isDialogueLevel ? "secondary" : "primary"}
+                                    <Box
                                         sx={{
-                                            cursor: 'pointer',
-                                            fontSize: '1.1rem',
-                                            height: isDialogueLevel ? '32px' : '40px',
-                                            '& .MuiChip-label': {
-                                                px: 2
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 0.5,
+                                            bgcolor: 'background.paper',
+                                            py: 0.5,
+                                            px: 1,
+                                            borderRadius: 1,
+                                            border: `1px solid ${grey[300]}`,
+                                            '&:hover': {
+                                                bgcolor: grey[50],
+                                                borderColor: grey[400]
                                             }
                                         }}
-                                        size="medium"
-                                    />
+                                    >
+                                        <Typography
+                                            variant="body2"
+                                            sx={{
+                                                color: 'text.primary',
+                                                fontWeight: 500,
+                                                fontSize: '1.1rem'
+                                            }}
+                                        >
+                                            {slot.key}:
+                                        </Typography>
+                                        <Typography
+                                            variant="body2"
+                                            sx={{
+                                                color: 'text.secondary',
+                                                fontSize: '1.1rem'
+                                            }}
+                                        >
+                                            {slot.value}
+                                        </Typography>
+                                        <IconButton
+                                            size="small"
+                                            onClick={() => handleRemoveSlot(index)}
+                                            sx={{
+                                                p: 0.2,
+                                                ml: 0.5,
+                                                color: grey[500],
+                                                '&:hover': {
+                                                    color: 'error.main',
+                                                    bgcolor: 'error.light'
+                                                }
+                                            }}
+                                        >
+                                            <DeleteIcon sx={{ fontSize: '1.1rem' }} />
+                                        </IconButton>
+                                    </Box>
                                 </motion.div>
                             ))}
                         </AnimatePresence>
-                    </Box>
 
-                    {/* Editing Slots */}
-                    <Box sx={{
-                        display: 'flex',
-                        flexWrap: 'wrap',
-                        gap: 1,
-                        mb: 1.5,
-                        minHeight: isDialogueLevel ? 40 : 40
-                    }}>
-                        <AnimatePresence>
+                        {/* 編集中のスロット */}
+                        <AnimatePresence mode="popLayout">
                             {editingSlots.map((slot) => (
                                 <motion.div
                                     key={slot.key}
                                     initial={{ opacity: 0, scale: 0.8 }}
                                     animate={{ opacity: 1, scale: 1 }}
                                     exit={{ opacity: 0, scale: 0.8 }}
-                                    whileHover={{ scale: 1.02 }}
+                                    layout
                                 >
                                     <Box
                                         sx={{
                                             display: 'flex',
                                             alignItems: 'center',
                                             gap: 1,
-                                            bgcolor: 'background.paper',
-                                            border: 1,
-                                            borderColor: 'divider',
-                                            borderRadius: 2,
-                                            px: 1.5,
-                                            py: 0.5,
-                                            height: isDialogueLevel ? '32px' : '40px',
-                                            boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                                            bgcolor: slot.isConfirmed ? grey[50] : 'background.paper',
+                                            p: 1,
+                                            borderRadius: 1,
+                                            boxShadow: 1,
+                                            border: `1px solid ${slot.isConfirmed ? grey[300] : green[300]}`,
+                                            transition: 'all 0.3s ease'
                                         }}
                                     >
                                         <Typography
-                                            variant="body1"
-                                            color="text.secondary"
+                                            variant="body2"
                                             sx={{
-                                                fontSize: '1.1rem',
-                                                fontWeight: 500
+                                                color: slot.isConfirmed ? grey[600] : 'text.primary',
+                                                fontWeight: 500,
+                                                fontSize: '1.1rem'
                                             }}
                                         >
                                             {slot.key}:
@@ -339,104 +365,141 @@ const SlotIntentEditor: React.FC<SlotIntentEditorProps> = ({
                                             size="medium"
                                             value={slot.value}
                                             onChange={(e) => handleUpdateSlotValue(slot.key, e.target.value)}
-                                            sx={{
-                                                width: '180px',
-                                                '& .MuiOutlinedInput-root': {
-                                                    height: isDialogueLevel ? '32px' : '40px',
+                                            disabled={slot.isConfirmed}
+                                            inputProps={{
+                                                'data-slot-key': slot.key,
+                                                style: {
+                                                    color: slot.isConfirmed ? grey[600] : 'inherit',
+                                                    padding: '2px 4px',
                                                     fontSize: '1.1rem'
-                                                },
-                                                '& .MuiOutlinedInput-input': {
-                                                    py: 0.5,
-                                                    px: 1.5
                                                 }
                                             }}
                                             onKeyPress={(e) => {
-                                                if (e.key === 'Enter' && slot.value.trim()) {
+                                                if (e.key === 'Enter' && slot.value.trim() && !slot.isConfirmed) {
+                                                    e.preventDefault();
                                                     handleConfirmSlot(slot);
                                                 }
                                             }}
+                                            sx={{
+                                                width: '120px',
+                                                '& .MuiInputBase-root': {
+                                                    height: '32px',
+                                                    bgcolor: slot.isConfirmed ? grey[50] : 'background.paper',
+                                                    fontSize: '1.1rem'
+                                                }
+                                            }}
                                         />
-                                        <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
+                                        {!slot.isConfirmed ? (
                                             <IconButton
                                                 size="medium"
                                                 onClick={() => handleConfirmSlot(slot)}
                                                 disabled={!slot.value.trim()}
                                                 sx={{
-                                                    p: 1
+                                                    '&:not(:disabled)': {
+                                                        color: green[500],
+                                                        '&:hover': {
+                                                            bgcolor: green[50]
+                                                        }
+                                                    }
                                                 }}
                                             >
-                                                <CheckIcon fontSize="medium" />
+                                                <CheckIcon sx={{ fontSize: '1.1rem' }} />
                                             </IconButton>
-                                        </motion.div>
-                                        <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
+                                        ) : (
                                             <IconButton
                                                 size="medium"
                                                 onClick={() => handleRemoveEditingSlot(slot.key)}
                                                 sx={{
-                                                    p: 1
+                                                    color: grey[500],
+                                                    '&:hover': {
+                                                        color: 'error.main',
+                                                        bgcolor: 'error.light'
+                                                    }
                                                 }}
                                             >
-                                                <DeleteIcon fontSize="medium" />
+                                                <DeleteIcon sx={{ fontSize: '1.1rem' }} />
                                             </IconButton>
-                                        </motion.div>
+                                        )}
                                     </Box>
                                 </motion.div>
                             ))}
                         </AnimatePresence>
-                    </Box>
 
-                    {/* New Slot Input */}
-                    {isDialogueLevel && (
-                        <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1.5 }}>
-                            <motion.div style={{ flex: '0 0 300px' }} whileHover={{ scale: 1.01 }}>
-                                <TextField
+                        {/* スロット選択メニュー */}
+                        {isSelectingSlot ? (
+                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                                <Autocomplete
                                     size="medium"
-                                    label="新規スロット"
-                                    value={newSlotKey}
-                                    onChange={(e) => setNewSlotKey(e.target.value)}
-                                    error={predefinedSlotKeys.includes(newSlotKey)}
-                                    helperText={predefinedSlotKeys.includes(newSlotKey) ? "このスロットは既に存在します" : ""}
-                                    sx={{
-                                        width: '300px',
-                                        '& .MuiInputBase-input': {
-                                            fontSize: '1.1rem',
-                                            py: isDialogueLevel ? 1 : 1.5,
-                                            height: isDialogueLevel ? '32px' : '40px',
-                                        },
-                                        '& .MuiInputLabel-root': {
-                                            fontSize: '1.1rem'
-                                        }
-                                    }}
-                                    onKeyPress={(e) => {
-                                        if (e.key === 'Enter' && newSlotKey && !predefinedSlotKeys.includes(newSlotKey)) {
-                                            handleAddNewSlot();
-                                        }
-                                    }}
+                                    options={availableSlotKeys}
+                                    value={selectedSlotKey}
+                                    onChange={(_, value) => handleSlotSelection(value)}
+                                    renderInput={(params) => (
+                                        <TextField
+                                            {...params}
+                                            placeholder="スロットを選択"
+                                            size="medium"
+                                            autoFocus
+                                            sx={{
+                                                width: '200px',
+                                                '& .MuiInputBase-root': {
+                                                    height: '32px',
+                                                    fontSize: '1.1rem'
+                                                },
+                                                '& .MuiInputBase-input': {
+                                                    fontSize: '1.1rem'
+                                                }
+                                            }}
+                                        />
+                                    )}
                                 />
-                            </motion.div>
-                            <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-                                <Button
-                                    variant="outlined"
-                                    startIcon={<AddIcon fontSize="medium" />}
-                                    onClick={handleAddNewSlot}
-                                    disabled={!newSlotKey || predefinedSlotKeys.includes(newSlotKey)}
-                                    color={isDialogueLevel ? "secondary" : "primary"}
-                                    size="large"
+                            </Box>
+                        ) : (
+                            <IconButton
+                                size="medium"
+                                onClick={() => setIsSelectingSlot(true)}
+                                disabled={availableSlotKeys.length === 0}
+                                sx={{
+                                    border: `1px dashed ${grey[300]}`,
+                                    borderRadius: 1,
+                                    p: 1,
+                                    '&:hover': {
+                                        bgcolor: grey[50]
+                                    }
+                                }}
+                            >
+                                <AddIcon sx={{ fontSize: '1.1rem' }} />
+                            </IconButton>
+                        )}
+
+                        {/* 確定済みスロットの一括保存ボタン */}
+                        {editingSlots.some(slot => slot.isConfirmed) && (
+                            <motion.div
+                                initial={{ opacity: 0, scale: 0.8 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.8 }}
+                            >
+                                <IconButton
+                                    size="medium"
+                                    onClick={handleSaveAllConfirmedSlots}
                                     sx={{
-                                        fontSize: '1.1rem',
-                                        py: isDialogueLevel ? 1 : 1.5,
-                                        height: isDialogueLevel ? '40px' : '48px',
-                                        minWidth: '120px'
+                                        color: green[500],
+                                        bgcolor: green[50],
+                                        border: `1px solid ${green[200]}`,
+                                        borderRadius: 1,
+                                        p: 1,
+                                        '&:hover': {
+                                            bgcolor: green[100]
+                                        }
                                     }}
                                 >
-                                    追加
-                                </Button>
+                                    <SaveIcon sx={{ fontSize: '1.1rem' }} />
+                                </IconButton>
                             </motion.div>
-                        </Stack>
-                    )}
+                        )}
+                    </Box>
                 </Box>
-            </Stack>
-        </MotionPaper>
+            </Box>
+        </Stack>
     );
 };
 

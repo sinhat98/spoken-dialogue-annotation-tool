@@ -40,7 +40,7 @@ echo "Processing directory: $TARGET_DIR"
 find "$TARGET_DIR" -name "audio.wav" | while read -r file; do
     dir=$(dirname "$file")
     echo "Converting: $file"
-    ffmpeg -i "$file" -af "pan=mono|c0=c0" -y "${dir}/audio_processed.wav" 2>/dev/null
+    ffmpeg -i "$file" -ss 2 -af "pan=mono|c0=c0" -y "${dir}/audio_processed.wav"
 done
 
 echo "Conversion completed" 

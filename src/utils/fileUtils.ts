@@ -120,4 +120,95 @@ export const exportAnnotations = (annotations: DialogueAnnotation[]): string => 
     });
 
     return csv;
+};
+
+export interface AnnotationData extends DialogueAnnotation {
+    customerId: string;
+    conversationId: string;
+    turns: Array<{
+        segments: Array<{ start: number; end: number }>;
+        intent: string;
+        slots: Array<{ key: string; value: string }>;
+    }>;
+    dialogueSlots: Array<{ key: string; value: string }>;
+}
+
+export const saveAnnotation = async (
+    customerId: string,
+    conversationId: string,
+    annotationData: DialogueAnnotation,
+    directoryHandle: FileSystemDirectoryHandle
+): Promise<void> => {
+    try {
+        // .cacheディレクトリを取得または作成
+        let cacheHandle: FileSystemDirectoryHandle;
+        try {
+            cacheHandle = await directoryHandle.getDirectoryHandle('.cache');
+        } catch {
+            cacheHandle = await directoryHandle.getDirectoryHandle('.cache', { create: true });
+        }
+
+        // アノテーションファイルを作成または取得
+        const filename = `${customerId}_${conversationId}.json`;
+        const fileHandle = await cacheHandle.getFileHandle(filename, { create: true });
+
+        // ファイルに書き込み
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(annotationData, null, 2));
+        await writable.close();
+
+    } catch (error) {
+        console.error('Failed to save annotation:', error);
+        throw error;
+    }
+};
+
+export const loadAnnotation = async (
+    customerId: string,
+    conversationId: string,
+    directoryHandle: FileSystemDirectoryHandle
+): Promise<DialogueAnnotation | null> => {
+    try {
+        // .cacheディレクトリを取得
+        const cacheHandle = await directoryHandle.getDirectoryHandle('.cache');
+        const filename = `${customerId}_${conversationId}.json`;
+
+        try {
+            const fileHandle = await cacheHandle.getFileHandle(filename);
+            const file = await fileHandle.getFile();
+            const data = await file.text();
+            const parsed = JSON.parse(data);
+            return {
+                customerId,
+                conversationId,
+                turns: parsed.turns || [],
+                dialogueSlots: parsed.dialogueSlots || []
+            };
+        } catch {
+            return null;
+        }
+    } catch (error) {
+        console.error('Failed to load annotation:', error);
+        return null;
+    }
+};
+
+export const clearCache = async (directoryHandle: FileSystemDirectoryHandle) => {
+    try {
+        // .cacheディレクトリを取得
+        const cacheHandle = await directoryHandle.getDirectoryHandle('.cache', { create: false });
+
+        // .cacheディレクトリ内のすべてのファイルを削除
+        for await (const [name, handle] of cacheHandle.entries()) {
+            await cacheHandle.removeEntry(name);
+        }
+
+        // .cacheディレクトリ自体を削除
+        await directoryHandle.removeEntry('.cache');
+
+        return true;
+    } catch (error) {
+        console.error('Failed to clear cache:', error);
+        return false;
+    }
 }; 

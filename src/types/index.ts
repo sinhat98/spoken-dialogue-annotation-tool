@@ -22,16 +22,21 @@ export interface SlotValue {
 }
 
 export interface Turn {
-    segments: Segment[];
     intent: string;
     slots: SlotValue[];
+    segments: Segment[];
 }
 
 export interface DialogueAnnotation {
     customerId: string;
     conversationId: string;
-    turns: Turn[];
+    turns: {
+        segments: Segment[];
+        intent: string;
+        slots: SlotValue[];
+    }[];
     dialogueSlots: SlotValue[];
+    intent?: string;
 }
 
 export interface AnnotationProgress {

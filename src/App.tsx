@@ -14,13 +14,19 @@ import {
   useMediaQuery,
   Divider,
   Stack,
+  LinearProgress,
+  Autocomplete,
+  TextField,
+  IconButton
 } from '@mui/material';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import SaveIcon from '@mui/icons-material/Save';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
 import FileUploadIcon from '@mui/icons-material/FileUpload';
+import DeleteIcon from '@mui/icons-material/Delete';
 import { motion } from 'framer-motion';
+import { useSnackbar } from 'notistack';
 
 import WaveformComponent from './components/WaveformComponent.tsx';
 import ConversationLogViewer from './components/ConversationLogViewer.tsx';
@@ -40,15 +46,22 @@ import {
   loadConversationLogFile,
   readConversationLog,
   readTextFile,
-  exportAnnotations
+  exportAnnotations,
+  saveAnnotation,
+  loadAnnotation,
+  clearCache
 } from './utils/fileUtils.ts';
+import SlotIntentContainer from './components/SlotIntentContainer.tsx';
 
 const App: React.FC = () => {
+  const { enqueueSnackbar } = useSnackbar();
+
   // State for conversation data
   const [conversations, setConversations] = useState<ConversationData[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [conversationLogs, setConversationLogs] = useState<ConversationLog[]>([]);
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [directoryHandle, setDirectoryHandle] = useState<FileSystemDirectoryHandle | null>(null);
 
   // State for annotation data
   const [annotations, setAnnotations] = useState<DialogueAnnotation[]>([]);
@@ -74,8 +87,40 @@ const App: React.FC = () => {
   const handleDirectorySelect = async () => {
     try {
       const dirHandle = await (window as any).showDirectoryPicker();
+      setDirectoryHandle(dirHandle);
       const conversationData = await scanDirectory(dirHandle);
       setConversations(conversationData);
+
+      // intent.txtとslot.txtの読み込み
+      try {
+        const intentFileHandle = await dirHandle.getFileHandle('intent.txt');
+        const slotFileHandle = await dirHandle.getFileHandle('slot.txt');
+
+        const intentFile = await intentFileHandle.getFile();
+        const slotFile = await slotFileHandle.getFile();
+
+        const intents = await readTextFile(intentFile);
+        const slots = await readTextFile(slotFile);
+
+        setPredefinedIntents(intents);
+        setPredefinedSlotKeys(slots);
+      } catch (error) {
+        console.log('intent.txt or slot.txt not found in directory');
+      }
+
+      // 既存のアノテーションを読み込む
+      const loadedAnnotations: DialogueAnnotation[] = [];
+      for (const conversation of conversationData) {
+        const savedAnnotation = await loadAnnotation(
+          conversation.customerId,
+          conversation.conversationId,
+          dirHandle
+        );
+        if (savedAnnotation) {
+          loadedAnnotations.push(savedAnnotation);
+        }
+      }
+      setAnnotations(loadedAnnotations);
 
       if (conversationData.length > 0) {
         setCurrentIndex(0);
@@ -190,33 +235,43 @@ const App: React.FC = () => {
     setCurrentTurnIndex(index);
   };
 
-  const handleIntentChange = (intent: string) => {
+  const handleIntentChange = useCallback((intent: string, turnIndex: number) => {
     if (!currentAnnotation) return;
 
-    const newTurns = [...currentAnnotation.turns];
-    newTurns[currentTurnIndex] = {
-      ...newTurns[currentTurnIndex],
-      intent
-    };
-
-    setCurrentAnnotation({
-      ...currentAnnotation,
-      turns: newTurns
+    setCurrentAnnotation(prev => {
+      if (!prev) return prev;
+      const newTurns = [...prev.turns];
+      newTurns[turnIndex] = {
+        ...newTurns[turnIndex],
+        intent
+      };
+      return {
+        ...prev,
+        turns: newTurns
+      };
     });
-  };
+  }, []);
 
-  const handleTurnSlotsChange = (slots: SlotValue[]) => {
+  const handleTurnSlotsChange = (slots: SlotValue[], turnIndex: number) => {
     if (!currentAnnotation) return;
 
+    // ターンのスロットを更新
     const newTurns = [...currentAnnotation.turns];
-    newTurns[currentTurnIndex] = {
-      ...newTurns[currentTurnIndex],
+    newTurns[turnIndex] = {
+      ...newTurns[turnIndex],
       slots
     };
 
+    // 対話全体のスロットを更新（ターンのスロットと同期を保つ）
+    const allTurnSlots = newTurns.flatMap(turn => turn.slots);
+    const uniqueDialogueSlots = allTurnSlots.filter((slot, index, self) =>
+      index === self.findIndex(s => s.key === slot.key && s.value === slot.value)
+    );
+
     setCurrentAnnotation({
       ...currentAnnotation,
-      turns: newTurns
+      turns: newTurns,
+      dialogueSlots: uniqueDialogueSlots
     });
   };
 
@@ -230,11 +285,15 @@ const App: React.FC = () => {
   };
 
   // Save and export handlers
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!currentAnnotation) return;
 
+    // 現在のアノテーションを保存
+    await saveCurrentAnnotation();
+
+    // annotationsステートを更新
     const newAnnotations = [...annotations];
-    const index = annotations.findIndex(
+    const index = newAnnotations.findIndex(
       a => a.customerId === currentAnnotation.customerId &&
         a.conversationId === currentAnnotation.conversationId
     );
@@ -244,7 +303,6 @@ const App: React.FC = () => {
     } else {
       newAnnotations.push(currentAnnotation);
     }
-
     setAnnotations(newAnnotations);
     setShowSaveDialog(true);
   };
@@ -260,6 +318,219 @@ const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  // 現在のアノテーションを保存する関数
+  const saveCurrentAnnotation = async () => {
+    if (!currentAnnotation || !directoryHandle) return;
+
+    const annotationData: DialogueAnnotation = {
+      customerId: currentAnnotation.customerId,
+      conversationId: currentAnnotation.conversationId,
+      turns: currentAnnotation.turns,
+      dialogueSlots: currentAnnotation.dialogueSlots
+    };
+
+    try {
+      await saveAnnotation(currentAnnotation.customerId, currentAnnotation.conversationId, annotationData, directoryHandle);
+      console.log('Annotation saved successfully');
+    } catch (error) {
+      console.error('Failed to save annotation:', error);
+    }
+  };
+
+  // 会話を切り替える際の処理を更新
+  const handleNavigateConversation = async (direction: 'prev' | 'next') => {
+    if (!directoryHandle) return;
+
+    if (currentAnnotation) {
+      // 現在のアノテーションを保存
+      await saveCurrentAnnotation();
+
+      // annotationsステートを更新
+      const newAnnotations = [...annotations];
+      const index = newAnnotations.findIndex(
+        a => a.customerId === currentAnnotation.customerId &&
+          a.conversationId === currentAnnotation.conversationId
+      );
+      if (index >= 0) {
+        newAnnotations[index] = currentAnnotation;
+      } else {
+        newAnnotations.push(currentAnnotation);
+      }
+      setAnnotations(newAnnotations);
+    }
+
+    // インデックスを更新
+    const newIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
+
+    if (newIndex >= 0 && newIndex < conversations.length) {
+      setCurrentIndex(newIndex);
+      await loadConversation(conversations[newIndex]);
+
+      // 新しいファイルのアノテーションを読み込む
+      const savedAnnotation = await loadAnnotation(
+        conversations[newIndex].customerId,
+        conversations[newIndex].conversationId,
+        directoryHandle
+      );
+      if (savedAnnotation) {
+        setCurrentAnnotation(savedAnnotation);
+        setCurrentTurnIndex(0);
+      } else {
+        setCurrentAnnotation({
+          customerId: conversations[newIndex].customerId,
+          conversationId: conversations[newIndex].conversationId,
+          turns: [],
+          dialogueSlots: []
+        });
+      }
+    }
+  };
+
+  // ターン削除のハンドラーを追加
+  const handleDeleteTurn = (index: number) => {
+    if (!currentAnnotation) return;
+
+    const newTurns = [...currentAnnotation.turns];
+    newTurns.splice(index, 1);  // 指定されたインデックスのターンを削除
+
+    setCurrentAnnotation({
+      ...currentAnnotation,
+      turns: newTurns
+    });
+
+    // 現在選択中のターンが削除された場合、選択を解除
+    if (currentTurnIndex === index) {
+      setCurrentTurnIndex(0);
+    } else if (currentTurnIndex > index) {
+      // 削除されたターンより後ろを選択していた場合、インデックスを1つ戻す
+      setCurrentTurnIndex(currentTurnIndex - 1);
+    }
+  };
+
+  // ターン一覧のUIコンポーネント
+  const TurnList: React.FC = () => {
+    if (!currentAnnotation) return null;
+
+    return (
+      <Box sx={{
+        flex: 1,
+        bgcolor: 'background.paper',
+        borderRadius: 2,
+        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+        p: 2,
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column'
+      }}>
+        <Typography variant="h6" gutterBottom sx={{ fontSize: '1.5rem', mb: 2 }}>
+          ターン一覧: {currentAnnotation.turns.length}個
+        </Typography>
+
+        <Box sx={{ flex: 1, overflow: 'auto' }}>
+          <Stack spacing={2}>
+            {currentAnnotation.turns.map((turn, index) => (
+              <Paper
+                key={index}
+                elevation={1}
+                sx={{
+                  bgcolor: index === currentTurnIndex ? 'rgba(25, 118, 210, 0.08)' : 'background.paper',
+                  '&:hover': {
+                    bgcolor: 'rgba(25, 118, 210, 0.12)'
+                  }
+                }}
+              >
+                {/* ターンヘッダー */}
+                <Box
+                  sx={{
+                    p: 2,
+                    borderBottom: 1,
+                    borderColor: 'divider',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}
+                  onClick={() => handleMarkerSelect(index)}
+                >
+                  <Stack direction="row" spacing={2} alignItems="center">
+                    <Typography variant="h6" sx={{ fontSize: '1.4rem', fontWeight: 'bold', minWidth: '120px' }}>
+                      ターン {index + 1}
+                    </Typography>
+                    <Typography color="success.main" sx={{ fontSize: '1.1rem', minWidth: '150px' }}>
+                      開始: {turn.segments[0].start.toFixed(2)}秒
+                    </Typography>
+                    <Typography color="error.main" sx={{ fontSize: '1.1rem', minWidth: '150px' }}>
+                      終了: {turn.segments[0].end.toFixed(2)}秒
+                    </Typography>
+                  </Stack>
+                  <IconButton
+                    size="medium"
+                    color="error"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteTurn(index);
+                    }}
+                    sx={{
+                      '&:hover': {
+                        bgcolor: 'error.light'
+                      }
+                    }}
+                  >
+                    <DeleteIcon />
+                  </IconButton>
+                </Box>
+
+                {/* アノテーション部分 */}
+                <Box sx={{ p: 2, bgcolor: 'rgba(25, 118, 210, 0.02)' }}>
+                  <Stack spacing={2}>
+                    {/* インテントとスロットの編集 */}
+                    <SlotIntentContainer
+                      predefinedSlotKeys={predefinedSlotKeys}
+                      predefinedIntents={predefinedIntents}
+                      initialSlots={turn.slots}
+                      initialIntent={turn.intent}
+                      onSlotsUpdate={(newSlots) => {
+                        // ターンのスロットを更新
+                        const newTurns = [...currentAnnotation.turns];
+                        newTurns[index] = {
+                          ...newTurns[index],
+                          slots: newSlots
+                        };
+
+                        // 対話レベルのスロットも更新
+                        const allTurnSlots = newTurns.flatMap(turn => turn.slots);
+                        const uniqueDialogueSlots = allTurnSlots.filter((slot, idx, self) =>
+                          idx === self.findIndex(s => s.key === slot.key && s.value === slot.value)
+                        );
+
+                        setCurrentAnnotation({
+                          ...currentAnnotation,
+                          turns: newTurns,
+                          dialogueSlots: uniqueDialogueSlots
+                        });
+                      }}
+                      onIntentUpdate={(newIntent) => {
+                        const newTurns = [...currentAnnotation.turns];
+                        newTurns[index] = {
+                          ...newTurns[index],
+                          intent: newIntent
+                        };
+                        setCurrentAnnotation({
+                          ...currentAnnotation,
+                          turns: newTurns
+                        });
+                      }}
+                    />
+                  </Stack>
+                </Box>
+              </Paper>
+            ))}
+          </Stack>
+        </Box>
+      </Box>
+    );
+  };
+
   return (
     <Box sx={{
       width: '100vw',
@@ -269,373 +540,288 @@ const App: React.FC = () => {
       flexDirection: 'column',
       bgcolor: theme.palette.background.default
     }}>
-      {/* Main Content */}
+      {/* Main Content Area */}
       <Box sx={{
         flex: 1,
-        overflow: 'hidden',
         display: 'flex',
-        flexDirection: 'column'
+        flexDirection: 'column',
+        overflow: 'hidden',
+        p: 2,
+        // フッターの高さ分の余白を削除
+        pb: 0
       }}>
         {/* Header */}
-        <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-          <Stack
-            direction="row"
-            spacing={2}
-            alignItems="flex-start"
-            justifyContent="space-between"
+        <Box sx={{
+          mb: 2,
+          borderBottom: 1,
+          borderColor: 'divider',
+          display: 'flex',
+          gap: 2,
+          alignItems: 'center'
+        }}>
+          {/* ディレクトリ選択ボタン */}
+          <Button
+            variant="contained"
+            size="large"
+            startIcon={<FolderOpenIcon />}
+            onClick={handleDirectorySelect}
+            sx={{
+              py: 2,
+              px: 4,
+              fontSize: '1.4rem',
+              fontWeight: 'bold',
+            }}
           >
-            {/* Left side - Directory selection and Turn Annotation */}
-            <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <Button
-                variant="contained"
-                size="large"
-                startIcon={<FolderOpenIcon />}
-                onClick={handleDirectorySelect}
-                sx={{
-                  py: 2,
-                  px: 4,
-                  fontSize: '1.4rem',
-                  fontWeight: 'bold',
-                  alignSelf: 'flex-start'
-                }}
-              >
-                ディレクトリを選択
-              </Button>
+            ディレクトリを選択
+          </Button>
 
-              {/* Turn Annotation Section */}
+          {/* Progress */}
+          <Box sx={{
+            flex: 1,
+            bgcolor: 'background.paper',
+            borderRadius: 2,
+            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+            p: 2
+          }}>
+            <Stack spacing={1}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+                アノテーション進捗: {progress.completed} / {progress.total}
+              </Typography>
+              {currentAnnotation && (
+                <Stack direction="row" spacing={2}>
+                  <Typography variant="body2" color="text.secondary">
+                    顧客ID: {currentAnnotation.customerId}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    対話ID: {currentAnnotation.conversationId}
+                  </Typography>
+                </Stack>
+              )}
+              <LinearProgress
+                variant="determinate"
+                value={(progress.completed / progress.total) * 100}
+                sx={{ height: 8, borderRadius: 4 }}
+              />
+            </Stack>
+          </Box>
+
+          {/* Dialogue Level Slots */}
+          {currentAnnotation && (
+            <Box sx={{
+              flex: 1,
+              bgcolor: 'background.paper',
+              borderRadius: 2,
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+              overflow: 'hidden',
+              maxHeight: '200px'
+            }}>
               <Box sx={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                bgcolor: 'background.paper',
-                borderRadius: 2,
-                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
-                overflow: 'hidden'
+                p: 1,
+                background: `linear-gradient(45deg, ${theme.palette.secondary.main} 30%, ${theme.palette.secondary.dark} 90%)`,
+                color: 'white'
               }}>
-                {/* Header */}
-                <Box sx={{
-                  p: 2.5,
-                  borderBottom: '1px solid',
-                  borderColor: 'divider',
-                  background: `linear-gradient(45deg, ${theme.palette.primary.main} 30%, ${theme.palette.primary.dark} 90%)`,
-                  color: 'white',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 2
-                }}>
-                  <Box sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 2,
-                    flex: 1
-                  }}>
-                    <Typography variant="h5" sx={{
-                      fontWeight: 'bold',
-                      fontSize: '1.8rem',
-                      letterSpacing: '0.5px',
-                      textShadow: '0 2px 4px rgba(0, 0, 0, 0.2)'
-                    }}>
-                      ターンアノテーション
-                    </Typography>
-                    {currentAnnotation && currentAnnotation.turns.length > 0 && (
-                      <Typography variant="h6" sx={{
-                        fontSize: '1.2rem',
-                        opacity: 0.9,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 1
-                      }}>
-                        Turn {currentTurnIndex + 1} / {currentAnnotation.turns.length}
-                      </Typography>
-                    )}
-                  </Box>
-                  <Stack direction="row" spacing={1}>
-                    <Button
-                      variant="contained"
-                      color="inherit"
-                      size="small"
-                      onClick={() => currentTurnIndex > 0 && setCurrentTurnIndex(currentTurnIndex - 1)}
-                      disabled={!currentAnnotation || currentTurnIndex <= 0}
-                      sx={{
-                        minWidth: 40,
-                        bgcolor: 'rgba(255, 255, 255, 0.1)',
-                        '&:hover': {
-                          bgcolor: 'rgba(255, 255, 255, 0.2)'
-                        }
-                      }}
-                    >
-                      ←
-                    </Button>
-                    <Button
-                      variant="contained"
-                      color="inherit"
-                      size="small"
-                      onClick={() => currentAnnotation && currentTurnIndex < currentAnnotation.turns.length - 1 && setCurrentTurnIndex(currentTurnIndex + 1)}
-                      disabled={!currentAnnotation || currentTurnIndex >= currentAnnotation.turns.length - 1}
-                      sx={{
-                        minWidth: 40,
-                        bgcolor: 'rgba(255, 255, 255, 0.1)',
-                        '&:hover': {
-                          bgcolor: 'rgba(255, 255, 255, 0.2)'
-                        }
-                      }}
-                    >
-                      →
-                    </Button>
-                  </Stack>
-                </Box>
-
-                {/* Waveform Section */}
-                <Box sx={{
-                  p: 2.5,
-                  flex: '0 0 auto',
-                  bgcolor: 'grey.50',
-                  borderBottom: '1px solid',
-                  borderColor: 'divider'
-                }}>
-                  {audioFile && currentAnnotation && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.5 }}
-                    >
-                      <WaveformComponent
-                        audioFile={audioFile}
-                        onMarkerSet={handleMarkerSet}
-                        onMarkerSelect={handleMarkerSelect}
-                        selectedTurnIndex={currentTurnIndex}
-                        segments={currentAnnotation.turns.map(turn => turn.segments[0])}
-                      />
-                    </motion.div>
-                  )}
-                </Box>
-
-                {/* Annotation Section */}
-                <Box sx={{
-                  flex: 1,
-                  overflow: 'auto',
-                  p: 2.5,
-                  borderTop: '1px solid',
-                  borderColor: 'divider',
-                  bgcolor: 'background.default'
-                }}>
-                  {currentAnnotation && currentAnnotation.turns[currentTurnIndex] ? (
-                    <motion.div
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.5 }}
-                    >
-                      <SlotIntentEditor
-                        turnIndex={currentTurnIndex}
-                        intent={currentAnnotation.turns[currentTurnIndex].intent}
-                        slots={currentAnnotation.turns[currentTurnIndex].slots}
-                        predefinedIntents={predefinedIntents}
-                        predefinedSlotKeys={predefinedSlotKeys}
-                        onIntentChange={handleIntentChange}
-                        onSlotsChange={handleTurnSlotsChange}
-                      />
-                    </motion.div>
-                  ) : (
-                    <Box sx={{
-                      height: '100%',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'text.secondary'
-                    }}>
-                      <Typography variant="h6">
-                        ターンが選択されていません
-                      </Typography>
-                    </Box>
-                  )}
-                </Box>
+                <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+                  対話レベルスロット
+                </Typography>
+              </Box>
+              <Box sx={{ p: 2, overflow: 'auto' }}>
+                <SlotIntentContainer
+                  isDialogueLevel={true}
+                  predefinedSlotKeys={predefinedSlotKeys}
+                  predefinedIntents={predefinedIntents}
+                  initialSlots={currentAnnotation.dialogueSlots}
+                  initialIntent={currentAnnotation.intent || ''}
+                  onSlotsUpdate={(newSlots) => {
+                    if (currentAnnotation) {
+                      setCurrentAnnotation({
+                        ...currentAnnotation,
+                        dialogueSlots: newSlots
+                      });
+                    }
+                  }}
+                  onIntentUpdate={(newIntent) => {
+                    if (currentAnnotation) {
+                      setCurrentAnnotation({
+                        ...currentAnnotation,
+                        intent: newIntent
+                      });
+                    }
+                  }}
+                />
               </Box>
             </Box>
+          )}
+        </Box>
 
-            {/* Right side - Progress, Dialogue Slots, and file uploads */}
-            <Stack spacing={2} sx={{ minWidth: 300, flex: 1 }}>
-              <AnnotationProgressBar
-                progress={progress}
-                currentConversation={currentAnnotation ? {
-                  customerId: currentAnnotation.customerId,
-                  conversationId: currentAnnotation.conversationId
-                } : undefined}
-              />
-              {currentAnnotation && (
-                <SlotIntentEditor
-                  isDialogueLevel={true}
-                  dialogueSlots={currentAnnotation.dialogueSlots}
-                  predefinedSlotKeys={predefinedSlotKeys}
-                  onDialogueSlotsChange={handleDialogueSlotsChange}
-                />
-              )}
-              <Stack direction="row" spacing={2}>
-                <Button
-                  variant="outlined"
-                  size="large"
-                  startIcon={<FileUploadIcon />}
-                  component="label"
-                  sx={{
-                    py: 1.5,
-                    px: 2,
-                    fontSize: '1.3rem'
-                  }}
-                >
-                  インテントリスト
-                  <input
-                    type="file"
-                    hidden
-                    accept=".txt"
-                    onChange={handleIntentFileUpload}
-                  />
-                </Button>
-                <Button
-                  variant="outlined"
-                  size="large"
-                  startIcon={<FileUploadIcon />}
-                  component="label"
-                  sx={{
-                    py: 1.5,
-                    px: 2,
-                    fontSize: '1.3rem'
-                  }}
-                >
-                  スロットリスト
-                  <input
-                    type="file"
-                    hidden
-                    accept=".txt"
-                    onChange={handleSlotKeysFileUpload}
-                  />
-                </Button>
-              </Stack>
-              {/* Conversation Log moved here */}
+        {/* Content Area - 上部のStackを削除してメインコンテンツ領域を拡大 */}
+        <Box sx={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
+          overflow: 'hidden',
+          p: 2,
+          pb: '80px'
+        }}>
+          {/* Main Content Area - Split into two columns */}
+          <Box sx={{
+            flex: 1,
+            display: 'flex',
+            gap: 2,
+            overflow: 'hidden',
+          }}>
+            {/* Left Column - Waveform and Turn List */}
+            <Box sx={{
+              flex: '2 1 0',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+              overflow: 'hidden',
+              minWidth: 0
+            }}>
+              {/* Waveform */}
               <Box sx={{
-                flex: 1,
                 bgcolor: 'background.paper',
                 borderRadius: 2,
                 boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+              }}>
+                {audioFile && (
+                  <WaveformComponent
+                    audioFile={audioFile}
+                    onMarkerSet={handleMarkerSet}
+                    onMarkerSelect={handleMarkerSelect}
+                    selectedTurnIndex={currentTurnIndex}
+                    segments={currentAnnotation?.turns.map(turn => turn.segments[0]) || []}
+                  />
+                )}
+              </Box>
+
+              {/* Turn List - 残りの空間を全て使用 */}
+              <Box sx={{
+                flex: 1,
                 overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column'
               }}>
-                <Box sx={{
-                  p: 2.5,
-                  borderBottom: '1px solid',
-                  borderColor: 'divider',
-                  background: `linear-gradient(45deg, ${theme.palette.secondary.main} 30%, ${theme.palette.secondary.dark} 90%)`,
-                  color: 'white',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 2
-                }}>
-                  <Typography variant="h5" sx={{
-                    fontWeight: 'bold',
-                    fontSize: '1.8rem',
-                    letterSpacing: '0.5px',
-                    textShadow: '0 2px 4px rgba(0, 0, 0, 0.2)'
-                  }}>
-                    対話ログ
-                  </Typography>
-                </Box>
-                <Box sx={{
-                  flex: 1,
-                  overflow: 'hidden',
-                  bgcolor: 'grey.50'
-                }}>
-                  <ConversationLogViewer logs={conversationLogs} />
-                </Box>
+                <TurnList />
               </Box>
-            </Stack>
-          </Stack>
+            </Box>
+
+            {/* Right Column - Conversation Log */}
+            <Box sx={{
+              flex: '1 1 0',
+              bgcolor: 'background.paper',
+              borderRadius: 2,
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              minWidth: 0
+            }}>
+              <Box sx={{
+                p: 1.5,
+                background: `linear-gradient(45deg, ${theme.palette.secondary.main} 30%, ${theme.palette.secondary.dark} 90%)`,
+                color: 'white'
+              }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+                  対話ログ
+                </Typography>
+              </Box>
+              <Box sx={{
+                flex: 1,
+                overflow: 'auto',
+                p: 2
+              }}>
+                <ConversationLogViewer logs={conversationLogs} />
+              </Box>
+            </Box>
+          </Box>
         </Box>
       </Box>
 
       {/* Footer */}
-      <Box sx={{
-        p: 2.5,
-        borderTop: '1px solid',
-        borderColor: 'divider',
-        bgcolor: 'background.paper',
-        boxShadow: '0 -4px 20px rgba(0, 0, 0, 0.05)'
-      }}>
-        <Stack
-          direction="row"
-          justifyContent="space-between"
-          alignItems="center"
-        >
-          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+      <Box
+        component="footer"
+        sx={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          bgcolor: 'background.paper',
+          borderTop: 1,
+          borderColor: 'divider',
+          boxShadow: '0 -4px 20px rgba(0, 0, 0, 0.05)',
+          zIndex: 1000,
+          p: 2
+        }}
+      >
+        <Box sx={{
+          borderTop: 1,
+          borderColor: 'divider',
+          p: 2,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          bgcolor: 'background.paper'
+        }}>
+          {/* 左側のナビゲーションボタン */}
+          <Box sx={{ display: 'flex', gap: 1 }}>
             <Button
-              size="large"
-              startIcon={<NavigateBeforeIcon sx={{ fontSize: '2rem' }} />}
+              variant="outlined"
+              startIcon={<NavigateBeforeIcon />}
               onClick={handlePrevious}
-              disabled={currentIndex === 0}
-              sx={{
-                fontSize: '1.4rem',
-                py: 1.5,
-                px: 4,
-                color: theme.palette.text.primary,
-                '&:not(:disabled)': {
-                  bgcolor: 'rgba(0, 0, 0, 0.05)',
-                  '&:hover': {
-                    bgcolor: 'rgba(0, 0, 0, 0.1)'
-                  }
-                }
-              }}
+              disabled={currentIndex <= 0}
             >
-              前の会話
+              前へ
             </Button>
-          </motion.div>
-
-          <motion.div
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-          >
             <Button
-              variant="contained"
-              size="large"
-              startIcon={<SaveIcon sx={{ fontSize: '2rem' }} />}
-              onClick={handleSave}
-              disabled={!currentAnnotation}
-              sx={{
-                fontSize: '1.5rem',
-                py: 2,
-                px: 6,
-                fontWeight: 'bold',
-                background: `linear-gradient(45deg, ${theme.palette.primary.main} 30%, ${theme.palette.primary.dark} 90%)`,
-                boxShadow: '0 4px 10px rgba(0, 0, 0, 0.2)',
-                '&:hover': {
-                  boxShadow: '0 6px 15px rgba(0, 0, 0, 0.3)'
-                }
-              }}
-            >
-              保存
-            </Button>
-          </motion.div>
-
-          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-            <Button
-              size="large"
-              endIcon={<NavigateNextIcon sx={{ fontSize: '2rem' }} />}
+              variant="outlined"
+              endIcon={<NavigateNextIcon />}
               onClick={handleNext}
-              disabled={currentIndex === conversations.length - 1}
-              sx={{
-                fontSize: '1.4rem',
-                py: 1.5,
-                px: 4,
-                color: theme.palette.text.primary,
-                '&:not(:disabled)': {
-                  bgcolor: 'rgba(0, 0, 0, 0.05)',
-                  '&:hover': {
-                    bgcolor: 'rgba(0, 0, 0, 0.1)'
-                  }
-                }
-              }}
+              disabled={currentIndex >= conversations.length - 1}
             >
-              次の会話
+              次へ
             </Button>
-          </motion.div>
-        </Stack>
+          </Box>
+
+          {/* 中央の保存ボタン */}
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<SaveIcon />}
+            onClick={() => setShowSaveDialog(true)}
+            disabled={!currentAnnotation}
+          >
+            保存
+          </Button>
+
+          {/* 右側のキャッシュクリアボタン */}
+          <Button
+            variant="outlined"
+            color="warning"
+            onClick={async () => {
+              if (!directoryHandle) return;
+
+              const result = await clearCache(directoryHandle);
+              if (result) {
+                enqueueSnackbar('キャッシュを削除しました', {
+                  variant: 'success',
+                  autoHideDuration: 2000,
+                  anchorOrigin: { vertical: 'bottom', horizontal: 'right' }
+                });
+              } else {
+                enqueueSnackbar('キャッシュの削除に失敗しました', {
+                  variant: 'error',
+                  autoHideDuration: 2000,
+                  anchorOrigin: { vertical: 'bottom', horizontal: 'right' }
+                });
+              }
+            }}
+            disabled={!directoryHandle}
+          >
+            キャッシュクリア
+          </Button>
+        </Box>
       </Box>
 
       {/* Save Dialog */}
