@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { SlotValue } from '../types';
 import SlotIntentEditor from './SlotIntentEditor.tsx';
 
@@ -24,7 +24,19 @@ const SlotIntentContainer: React.FC<SlotIntentContainerProps> = ({
     const [slots, setSlots] = useState<SlotValue[]>(initialSlots);
     const [dialogueSlots, setDialogueSlots] = useState<SlotValue[]>([]);
     const [intent, setIntent] = useState<string>(initialIntent);
-    const [isEditingIntent, setIsEditingIntent] = useState(false);
+    const [customSlotKeys, setCustomSlotKeys] = useState<string[]>([]);
+
+    // カスタムスロットを追加
+    const handleCustomSlotAdd = (slotKey: string) => {
+        if (!predefinedSlotKeys.includes(slotKey) && !customSlotKeys.includes(slotKey)) {
+            setCustomSlotKeys(prev => [...prev, slotKey]);
+        }
+    };
+
+    // 利用可能なすべてのスロットキーを計算
+    const allSlotKeys = useMemo(() => {
+        return [...predefinedSlotKeys, ...customSlotKeys];
+    }, [predefinedSlotKeys, customSlotKeys]);
 
     // スロットの削除ハンドラー
     const handleRemoveSlot = (index: number) => {
@@ -57,11 +69,6 @@ const SlotIntentContainer: React.FC<SlotIntentContainerProps> = ({
         onIntentUpdate?.(newIntent);
     };
 
-    // インテントの確定処理
-    const handleIntentConfirm = () => {
-        setIsEditingIntent(false);
-    };
-
     // initialIntent が変更されたときに intent を更新
     useEffect(() => {
         setIntent(initialIntent);
@@ -82,13 +89,14 @@ const SlotIntentContainer: React.FC<SlotIntentContainerProps> = ({
             slots={slots}
             dialogueSlots={dialogueSlots}
             predefinedIntents={predefinedIntents}
-            predefinedSlotKeys={predefinedSlotKeys}
+            predefinedSlotKeys={allSlotKeys}
             onIntentChange={handleIntentChange}
             onSlotsChange={handleSlotsChange}
             onDialogueSlotsChange={handleDialogueSlotsChange}
             isDialogueLevel={isDialogueLevel}
             onDeleteSlot={handleRemoveSlot}
             showIntent={!isDialogueLevel}
+            onCustomSlotAdd={handleCustomSlotAdd}
         />
     );
 };

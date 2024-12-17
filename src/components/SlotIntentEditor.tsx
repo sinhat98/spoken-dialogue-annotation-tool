@@ -33,6 +33,7 @@ interface SlotIntentEditorProps {
     onDeleteTurn?: () => void;
     onDeleteSlot?: (index: number) => void;
     showIntent?: boolean;
+    onCustomSlotAdd?: (slotKey: string) => void;
 }
 
 interface EditingSlot {
@@ -55,6 +56,7 @@ const SlotIntentEditor: React.FC<SlotIntentEditorProps> = ({
     onDeleteTurn,
     onDeleteSlot,
     showIntent = true,
+    onCustomSlotAdd,
 }) => {
     const { enqueueSnackbar } = useSnackbar();
 
@@ -444,31 +446,39 @@ const SlotIntentEditor: React.FC<SlotIntentEditorProps> = ({
 
                         {/* スロット選択メニュー */}
                         {isSelectingSlot ? (
-                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                                <Autocomplete
-                                    size="medium"
-                                    options={availableSlotKeys}
-                                    value={selectedSlotKey}
-                                    onChange={(_, value) => handleSlotSelection(value)}
-                                    renderInput={(params) => (
-                                        <TextField
-                                            {...params}
-                                            placeholder="スロットを選択"
-                                            size="medium"
-                                            autoFocus
-                                            sx={{
-                                                width: '200px',
-                                                '& .MuiInputBase-root': {
-                                                    height: '32px',
-                                                    fontSize: '1.1rem'
-                                                },
-                                                '& .MuiInputBase-input': {
-                                                    fontSize: '1.1rem'
-                                                }
-                                            }}
-                                        />
-                                    )}
-                                />
+                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <>
+                                    <Autocomplete
+                                        size="medium"
+                                        options={availableSlotKeys}
+                                        value={selectedSlotKey}
+                                        onChange={(_, value) => handleSlotSelection(value)}
+                                        freeSolo
+                                        onInputChange={(_, newValue) => {
+                                            if (newValue && !availableSlotKeys.includes(newValue)) {
+                                                onCustomSlotAdd?.(newValue);
+                                            }
+                                        }}
+                                        renderInput={(params) => (
+                                            <TextField
+                                                {...params}
+                                                placeholder="スロットを選択または入力"
+                                                size="medium"
+                                                autoFocus
+                                                sx={{
+                                                    width: '200px',
+                                                    '& .MuiInputBase-root': {
+                                                        height: '32px',
+                                                        fontSize: '1.1rem'
+                                                    },
+                                                    '& .MuiInputBase-input': {
+                                                        fontSize: '1.1rem'
+                                                    }
+                                                }}
+                                            />
+                                        )}
+                                    />
+                                </>
                             </Box>
                         ) : (
                             <IconButton
