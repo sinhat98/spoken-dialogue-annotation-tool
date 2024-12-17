@@ -92,13 +92,13 @@ export const exportAnnotations = (annotations: DialogueAnnotation[]): string => 
         // 各ターンについて1レコードを作成
         annotation.turns.forEach((turn, turnIndex) => {
             const row = [
-                `<span style="font-size: 16px">${annotation.customerId}</span>`,
-                `<span style="font-size: 16px">${annotation.conversationId}</span>`,
+                annotation.customerId,
+                annotation.conversationId,
                 turnIndex,
                 turn.segments[0].start,
                 turn.segments[0].end,
-                Math.max(0, turn.segments[0].end - 0.1),  // セグメント開始時刻
-                Math.min(turn.segments[0].end + 0.1),     // セグメント終了時刻
+                Math.max(0, turn.segments[0].end - 0.1),
+                Math.min(turn.segments[0].end + 0.1),
                 turn.intent,
                 JSON.stringify(turn.slots),
                 JSON.stringify(annotation.dialogueSlots)
@@ -107,7 +107,6 @@ export const exportAnnotations = (annotations: DialogueAnnotation[]): string => 
             // 値のエスケープ処理
             const escapedRow = row.map(value => {
                 if (typeof value === 'string') {
-                    // カンマやダブルクォートを含む場合、ダブルクォートで囲む
                     if (value.includes(',') || value.includes('"')) {
                         return `"${value.replace(/"/g, '""')}"`;
                     }

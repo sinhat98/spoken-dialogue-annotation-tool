@@ -76,7 +76,11 @@ const App: React.FC = () => {
   // Progress tracking
   const progress: AnnotationProgress = {
     total: conversations.length,
-    completed: annotations.length
+    completed: annotations.filter(annotation =>
+      // インテントが設定されているか、ターンにインテントが設定されているものをカウント
+      annotation.intent ||
+      annotation.turns.some(turn => turn.intent)
+    ).length
   };
 
   const theme = useTheme();
@@ -185,14 +189,22 @@ const App: React.FC = () => {
   // Navigation handlers
   const handleNext = async () => {
     if (currentIndex < conversations.length - 1) {
+      // 現在のアノテーションを保存
+      await autoSaveAnnotation();
+      // 次の会話へ移動
       setCurrentIndex(currentIndex + 1);
+      // 次の会話データを読み込む
       await loadConversation(conversations[currentIndex + 1]);
     }
   };
 
   const handlePrevious = async () => {
     if (currentIndex > 0) {
+      // 現在のアノテーションを保存
+      await autoSaveAnnotation();
+      // 前の会話へ移動
       setCurrentIndex(currentIndex - 1);
+      // 前の会話データを読み込む
       await loadConversation(conversations[currentIndex - 1]);
     }
   };
@@ -529,6 +541,51 @@ const App: React.FC = () => {
         </Box>
       </Box>
     );
+  };
+
+  // 自動保存関数を修正
+  const autoSaveAnnotation = async () => {
+    if (currentAnnotation && directoryHandle) {
+      try {
+        await saveAnnotation(
+          currentAnnotation.customerId,
+          currentAnnotation.conversationId,
+          currentAnnotation,
+          directoryHandle
+        );
+
+        // annotations配列を更新
+        setAnnotations(prevAnnotations => {
+          const index = prevAnnotations.findIndex(
+            a => a.customerId === currentAnnotation.customerId &&
+              a.conversationId === currentAnnotation.conversationId
+          );
+
+          if (index >= 0) {
+            // 既存のアノテーションを更新
+            const newAnnotations = [...prevAnnotations];
+            newAnnotations[index] = currentAnnotation;
+            return newAnnotations;
+          } else {
+            // 新しいアノテーションを追加
+            return [...prevAnnotations, currentAnnotation];
+          }
+        });
+
+        enqueueSnackbar('アノテーションを自動保存しました', {
+          variant: 'success',
+          autoHideDuration: 2000,
+          anchorOrigin: { vertical: 'bottom', horizontal: 'right' }
+        });
+      } catch (error) {
+        console.error('Failed to auto-save annotation:', error);
+        enqueueSnackbar('自動保存に失敗しました', {
+          variant: 'error',
+          autoHideDuration: 2000,
+          anchorOrigin: { vertical: 'bottom', horizontal: 'right' }
+        });
+      }
+    }
   };
 
   return (

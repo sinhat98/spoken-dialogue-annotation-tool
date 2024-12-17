@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
     Box,
     Typography,
@@ -229,6 +229,14 @@ const SlotIntentEditor: React.FC<SlotIntentEditorProps> = ({
         }
     };
 
+    // ローカルの状態を追加
+    const [localIntent, setLocalIntent] = useState(intent);
+
+    // intentが変更されたときにlocalIntentを更新
+    useEffect(() => {
+        setLocalIntent(intent);
+    }, [intent]);
+
     return (
         <Stack spacing={2}>
             <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
@@ -241,9 +249,18 @@ const SlotIntentEditor: React.FC<SlotIntentEditorProps> = ({
                         <Autocomplete
                             freeSolo
                             size="small"
-                            value={intent}
+                            value={localIntent}
                             options={predefinedIntents}
-                            onChange={(_, newValue) => onIntentChange?.(newValue || '')}
+                            onChange={(_, newValue) => {
+                                setLocalIntent(newValue || '');
+                                onIntentChange?.(newValue || '');
+                            }}
+                            onInputChange={(_, newValue) => {
+                                setLocalIntent(newValue);
+                            }}
+                            onBlur={() => {
+                                onIntentChange?.(localIntent);
+                            }}
                             sx={{ width: '100%' }}
                             renderInput={(params) => (
                                 <TextField
